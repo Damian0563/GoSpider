@@ -1,5 +1,7 @@
 package main
 
-func main() {
+import "gospider/cmd"
 
+func main() {
+	cmd.Execute()
 }
