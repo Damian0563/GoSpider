@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"encoding/json"
-	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -15,21 +14,23 @@ import (
 )
 
 var (
-	seen sync.Map // thread-safe map of visited URLs
-	sem  = make(chan struct{}, 20)
+	sem = make(chan struct{}, 20)
 )
 
 type Page struct {
 	url     string
 	content string
+	seen    map[string][]string
+	mu      sync.Mutex
 }
 
 func (page *Page) Split() []string {
 	return strings.Split(page.content, " ")
 }
 
-func (page *Page) getLinks(depth int) {
+func (page *Page) getLinks() {
 	body := page.Split()
+	page.seen[page.url] = []string{}
 	var wg sync.WaitGroup
 	for _, word := range body {
 		if !strings.HasPrefix(word, "href=\"") {
@@ -56,22 +57,25 @@ func (page *Page) getLinks(depth int) {
 			base, _ := url.Parse(page.url)
 			href, _ := url.Parse(link)
 			corrected := base.ResolveReference(href).String()
-			if _, loaded := seen.LoadOrStore(corrected, true); loaded {
-				return
+			if validateLink(corrected) {
+				page.mu.Lock()
+				page.seen[page.url] = append(page.seen[page.url], corrected)
+				page.mu.Unlock()
 			}
-			go execute(corrected, depth+1)
-
 		}(word)
 	}
 	wg.Wait()
-	all := []string{}
-	seen.Range(func(key, _ any) bool {
-		all = append(all, key.(string))
-		return true
-	})
-	out, _ := json.MarshalIndent(all, "", "  ")
+	out, _ := json.MarshalIndent(page.seen, "", "  ")
 	os.WriteFile("storage.json", out, os.ModePerm)
-	fmt.Println(string(out))
+}
+
+func validateLink(link string) bool {
+	resp, err := http.Get(link)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode < 400
 }
 
 var command = &cobra.Command{
@@ -84,10 +88,7 @@ var command = &cobra.Command{
 	Args: cobra.ExactArgs(1),
 }
 
-func execute(target string, depth int) {
-	if depth > 2 {
-		return
-	}
+func execute(target string) {
 	sem <- struct{}{}
 	defer func() { <-sem }()
 	resp, err := http.Get(target)
@@ -101,12 +102,12 @@ func execute(target string, depth int) {
 		log.Println("Read failed:", err)
 		return
 	}
-	page := Page{url: target, content: string(bodyByte)}
-	page.getLinks(depth)
+	page := Page{url: target, content: string(bodyByte), seen: make(map[string][]string)}
+	page.getLinks()
 }
 
 func crawl(cmd *cobra.Command, startURL string) {
-	execute(startURL, 0)
+	execute(startURL)
 }
 
 func init() {
