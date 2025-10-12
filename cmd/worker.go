@@ -1,20 +1,24 @@
 package cmd
 
 import (
-	"encoding/json"
+	"context"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"sync"
 
 	"github.com/spf13/cobra"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 var (
 	sem = make(chan struct{}, 20)
+	mu  sync.Mutex
 )
 
 type Page struct {
@@ -28,7 +32,7 @@ func (page *Page) Split() []string {
 	return strings.Split(page.content, " ")
 }
 
-func (page *Page) getLinks() {
+func (page *Page) getLinks(client *mongo.Client) {
 	body := page.Split()
 	page.seen[page.url] = []string{}
 	var wg sync.WaitGroup
@@ -61,16 +65,30 @@ func (page *Page) getLinks() {
 				page.mu.Lock()
 				page.seen[page.url] = append(page.seen[page.url], corrected)
 				page.mu.Unlock()
+
 			}
 		}(word)
 	}
 	wg.Wait()
-	out, _ := json.MarshalIndent(page.seen, "", "  ")
-	os.WriteFile("storage.json", out, os.ModePerm)
+	//out, _ := json.MarshalIndent(page.seen, "", "  ")
+	//fmt.Print(string(out))
+	//os.WriteFile("storage.json", out, os.ModePerm)
+	doc := map[string]any{
+		"url":  page.url,
+		"seen": page.seen[page.url],
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	coll := client.Database("crawler").Collection("links")
+	_, err := coll.InsertOne(context.TODO(), doc)
+	if err != nil {
+		log.Fatal(err)
+	}
+
 }
 
 func validateLink(link string) bool {
-	resp, err := http.Get(link)
+	resp, err := http.Head(link)
 	if err != nil {
 		return false
 	}
@@ -88,7 +106,7 @@ var command = &cobra.Command{
 	Args: cobra.ExactArgs(1),
 }
 
-func execute(target string) {
+func execute(target string, client *mongo.Client) {
 	sem <- struct{}{}
 	defer func() { <-sem }()
 	resp, err := http.Get(target)
@@ -103,11 +121,45 @@ func execute(target string) {
 		return
 	}
 	page := Page{url: target, content: string(bodyByte), seen: make(map[string][]string)}
-	page.getLinks()
+	page.getLinks(client)
 }
 
 func crawl(cmd *cobra.Command, startURL string) {
-	execute(startURL)
+	uri := "mongodb://localhost:27017/"
+	client, err := mongo.Connect(context.TODO(), options.Client().
+		ApplyURI(uri))
+	if err != nil {
+		panic(err)
+	}
+	defer func(ctx context.Context) {
+		client.Disconnect(ctx)
+	}(context.TODO())
+	filter := bson.D{
+		bson.E{Key: "url", Value: startURL},
+	}
+	cursor, err := client.Database("crawler").Collection("links").Find(context.TODO(), filter)
+	if err != nil {
+		log.Fatal(err)
+	}
+	results := []map[string]any{
+		{
+			"url":  startURL,
+			"seen": []string{},
+		},
+	}
+	if err = cursor.All(context.TODO(), &results); err != nil {
+		panic(err)
+	}
+	if len(results) > 0 {
+		data, err := bson.MarshalExtJSON(bson.M{"results": results[0]["seen"]}, false, false)
+		if err != nil {
+			log.Println("BSON marshal error:", err)
+			return
+		}
+		fmt.Println(string(data))
+		return
+	}
+	execute(startURL, client)
 }
 
 func init() {
