@@ -1,15 +1,20 @@
 package cmd
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
+	"time"
 
+	"github.com/joho/godotenv"
 	"github.com/spf13/cobra"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -17,8 +22,9 @@ import (
 )
 
 var (
-	sem = make(chan struct{}, 20)
-	mu  sync.Mutex
+	sem    = make(chan struct{}, 20)
+	mu     sync.Mutex
+	update bool
 )
 
 type Page struct {
@@ -70,12 +76,13 @@ func (page *Page) getLinks(client *mongo.Client) {
 		}(word)
 	}
 	wg.Wait()
-	//out, _ := json.MarshalIndent(page.seen, "", "  ")
-	//fmt.Print(string(out))
+	out, _ := json.MarshalIndent(page.seen, "", "  ")
+	fmt.Print(string(out))
 	//os.WriteFile("storage.json", out, os.ModePerm)
 	doc := map[string]any{
 		"url":  page.url,
 		"seen": page.seen[page.url],
+		"time": time.Now().Format(time.DateOnly),
 	}
 	mu.Lock()
 	defer mu.Unlock()
@@ -124,10 +131,13 @@ func execute(target string, client *mongo.Client) {
 	page.getLinks(client)
 }
 
-func crawl(cmd *cobra.Command, startURL string) {
-	uri := "mongodb://localhost:27017/"
-	client, err := mongo.Connect(context.TODO(), options.Client().
-		ApplyURI(uri))
+func crawl(_ *cobra.Command, startURL string) {
+	if err := godotenv.Load(); err != nil {
+		log.Println(err)
+		log.Println("No .env file found — using system environment variables")
+	}
+	uri := os.Getenv("MONGO_URI")
+	client, err := mongo.Connect(context.TODO(), options.Client().ApplyURI(uri))
 	if err != nil {
 		panic(err)
 	}
@@ -150,18 +160,37 @@ func crawl(cmd *cobra.Command, startURL string) {
 	if err = cursor.All(context.TODO(), &results); err != nil {
 		panic(err)
 	}
-	if len(results) > 0 {
-		data, err := bson.MarshalExtJSON(bson.M{"results": results[0]["seen"]}, false, false)
-		if err != nil {
-			log.Println("BSON marshal error:", err)
-			return
+	if !update {
+		if len(results) > 0 {
+			data, err := bson.MarshalExtJSON(bson.M{"results": results[0]["seen"]}, false, false)
+			if err != nil {
+				log.Println("BSON marshal error:", err)
+				return
+			}
+			date := results[0]["time"]
+			fmt.Printf("Entry already exists, it was created on %v. Do you wish to update it?\n[y/n] ", date)
+			res, err := bufio.NewReader(os.Stdin).ReadString('\n')
+			if err != nil {
+				log.Println("Input error:", err)
+				return
+			} else {
+				res = strings.TrimSpace(res)
+				if res != "y" && res != "Y" && res != "yes" && res != "YES" {
+					formatted, err := json.MarshalIndent(string(data), "", "  ")
+					if err != nil {
+						log.Println("JSON marshal error:", err)
+						return
+					}
+					fmt.Print(string(formatted))
+					return
+				}
+			}
 		}
-		fmt.Println(string(data))
-		return
 	}
 	execute(startURL, client)
 }
 
 func init() {
+	command.Flags().BoolVarP(&update, "update", "u", false, "Update existing links")
 	rootCmd.AddCommand(command)
 }
