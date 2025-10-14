@@ -38,17 +38,27 @@ func (page *Page) Split() []string {
 	return strings.Split(page.content, " ")
 }
 
-func (page *Page) getLinks(client *mongo.Client) {
+func check_exsistence(client *mongo.Client, url string) bool {
+	filter := bson.D{
+		bson.E{Key: "url", Value: url},
+	}
+	count, err := client.Database("crawler").Collection("links").CountDocuments(context.TODO(), filter)
+	if err != nil {
+		return true
+	}
+	return count > 0
+}
+
+func (page *Page) getLinks(client *mongo.Client, wg *sync.WaitGroup) {
 	body := page.Split()
+	defer wg.Done()
 	page.seen[page.url] = []string{}
-	var wg sync.WaitGroup
 	for _, word := range body {
 		if !strings.HasPrefix(word, "href=\"") {
 			continue
 		}
 		wg.Add(1)
 		go func(word string) {
-			defer wg.Done()
 			link, found := strings.CutPrefix(word, "href=\"")
 			if !found {
 				return
@@ -71,14 +81,15 @@ func (page *Page) getLinks(client *mongo.Client) {
 				page.mu.Lock()
 				page.seen[page.url] = append(page.seen[page.url], corrected)
 				page.mu.Unlock()
-
+				if !check_exsistence(client, corrected) {
+					wg.Add(1)
+					go execute(corrected, client, wg)
+				}
 			}
 		}(word)
 	}
-	wg.Wait()
 	out, _ := json.MarshalIndent(page.seen, "", "  ")
 	fmt.Print(string(out))
-	//os.WriteFile("storage.json", out, os.ModePerm)
 	doc := map[string]any{
 		"url":  page.url,
 		"seen": page.seen[page.url],
@@ -86,10 +97,25 @@ func (page *Page) getLinks(client *mongo.Client) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	coll := client.Database("crawler").Collection("links")
-	_, err := coll.InsertOne(context.TODO(), doc)
-	if err != nil {
-		log.Fatal(err)
+	if !update {
+		coll := client.Database("crawler").Collection("links")
+		_, err := coll.InsertOne(context.TODO(), doc)
+		if err != nil {
+			log.Fatal(err)
+		}
+	} else {
+		filter := bson.D{bson.E{Key: "url", Value: page.url}}
+		update := bson.D{
+			{Key: "$set", Value: bson.D{
+				{Key: "seen", Value: page.seen[page.url]},
+				{Key: "time", Value: time.Now().Format(time.DateOnly)},
+			}},
+		}
+		coll := client.Database("crawler").Collection("links")
+		_, err := coll.UpdateOne(context.TODO(), filter, update)
+		if err != nil {
+			log.Fatal(err)
+		}
 	}
 
 }
@@ -113,7 +139,7 @@ var command = &cobra.Command{
 	Args: cobra.ExactArgs(1),
 }
 
-func execute(target string, client *mongo.Client) {
+func execute(target string, client *mongo.Client, wg *sync.WaitGroup) {
 	sem <- struct{}{}
 	defer func() { <-sem }()
 	resp, err := http.Get(target)
@@ -128,7 +154,7 @@ func execute(target string, client *mongo.Client) {
 		return
 	}
 	page := Page{url: target, content: string(bodyByte), seen: make(map[string][]string)}
-	page.getLinks(client)
+	page.getLinks(client, wg)
 }
 
 func crawl(_ *cobra.Command, startURL string) {
@@ -162,7 +188,12 @@ func crawl(_ *cobra.Command, startURL string) {
 	}
 	if !update {
 		if len(results) > 0 {
-			data, err := bson.MarshalExtJSON(bson.M{"results": results[0]["seen"]}, false, false)
+			urlStr, ok := results[0]["url"].(string)
+			if !ok {
+				log.Println("Type assertion for url failed")
+				return
+			}
+			data, err := bson.MarshalExtJSON(bson.M{urlStr: results[0]["seen"]}, false, false)
 			if err != nil {
 				log.Println("BSON marshal error:", err)
 				return
@@ -184,10 +215,14 @@ func crawl(_ *cobra.Command, startURL string) {
 					fmt.Print(string(formatted))
 					return
 				}
+				update = true
 			}
 		}
 	}
-	execute(startURL, client)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go execute(startURL, client, &wg)
+	wg.Wait()
 }
 
 func init() {
