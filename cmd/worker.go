@@ -22,9 +22,11 @@ import (
 )
 
 var (
-	sem    = make(chan struct{}, 20)
-	mu     sync.Mutex
-	update bool
+	sem       = make(chan struct{}, 20)
+	mu        sync.Mutex
+	update    bool
+	recursive bool
+	cache     sync.Map
 )
 
 type Page struct {
@@ -81,9 +83,13 @@ func (page *Page) getLinks(client *mongo.Client, wg *sync.WaitGroup) {
 				page.mu.Lock()
 				page.seen[page.url] = append(page.seen[page.url], corrected)
 				page.mu.Unlock()
-				if !check_exsistence(client, corrected) {
-					wg.Add(1)
-					go execute(corrected, client, wg)
+				if recursive {
+					_, ok := cache.Load(page.url)
+					if !ok && !check_exsistence(client, corrected) {
+						cache.Store(page.url, true)
+						wg.Add(1)
+						go execute(corrected, client, wg)
+					}
 				}
 			}
 		}(word)
@@ -227,5 +233,6 @@ func crawl(_ *cobra.Command, startURL string) {
 
 func init() {
 	command.Flags().BoolVarP(&update, "update", "u", false, "Update existing links")
+	command.Flags().BoolVarP(&recursive, "recursive", "r", true, "Recursively crawl links")
 	rootCmd.AddCommand(command)
 }
