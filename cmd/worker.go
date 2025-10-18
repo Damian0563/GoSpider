@@ -14,12 +14,15 @@ import (
 	"sync"
 	"time"
 
+	"cloud.google.com/go/vertexai/genai"
 	"github.com/joho/godotenv"
 	"github.com/spf13/cobra"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
+
+var INPUT_PROMPT string = "Create a concise and informative brief summary for the following HTML content: "
 
 var (
 	sem       = make(chan struct{}, 20)
@@ -36,8 +39,19 @@ type Page struct {
 	mu      sync.Mutex
 }
 
-func (page *Page) Split() []string {
-	return strings.Split(page.content, " ")
+func summarizePage(html_content string) any {
+	ctx := context.Background()
+	client, err := genai.NewClient(ctx, os.Getenv("PROJECT_ID"), os.Getenv("REGION"))
+	if err != nil {
+		return ""
+	}
+	defer client.Close()
+	prompt := genai.Text(INPUT_PROMPT + html_content)
+	response, err := client.GenerativeModel(os.Getenv("MODEL")).GenerateContent(ctx, prompt)
+	if err != nil {
+		return ""
+	}
+	return response.Candidates[0].Content.Parts[0]
 }
 
 func check_exsistence(client *mongo.Client, url string) bool {
@@ -49,6 +63,10 @@ func check_exsistence(client *mongo.Client, url string) bool {
 		return true
 	}
 	return count > 0
+}
+
+func (page *Page) Split() []string {
+	return strings.Split(page.content, " ")
 }
 
 func (page *Page) getLinks(client *mongo.Client, wg *sync.WaitGroup) {
@@ -94,12 +112,18 @@ func (page *Page) getLinks(client *mongo.Client, wg *sync.WaitGroup) {
 			}
 		}(word)
 	}
-	out, _ := json.MarshalIndent(page.seen, "", "  ")
-	fmt.Print(string(out))
+	//out, _ := json.MarshalIndent(page.seen, "", "  ")
+	//fmt.Print(string(out))
 	doc := map[string]any{
-		"url":  page.url,
-		"seen": page.seen[page.url],
-		"time": time.Now().Format(time.DateOnly),
+		"url":     page.url,
+		"seen":    page.seen[page.url],
+		"time":    time.Now().Format(time.DateOnly),
+		"summary": summarizePage(page.content),
+	}
+	fmt.Print(doc["summary"])
+	fmt.Println("Related pages: ")
+	for i := 0; i < len(page.seen[page.url]); i++ {
+		fmt.Printf("%d. %s\n", i+1, page.seen[page.url][i])
 	}
 	mu.Lock()
 	defer mu.Unlock()
