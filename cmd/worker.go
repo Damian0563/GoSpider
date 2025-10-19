@@ -10,11 +10,11 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
-	"cloud.google.com/go/vertexai/genai"
 	"github.com/joho/godotenv"
 	"github.com/spf13/cobra"
 	"go.mongodb.org/mongo-driver/bson"
@@ -39,28 +39,13 @@ type Page struct {
 	mu      sync.Mutex
 }
 
-func summarizePage(html_content string) any {
-	ctx := context.Background()
-	client, err := genai.NewClient(ctx, os.Getenv("PROJECT_ID"), os.Getenv("REGION"))
-	if err != nil {
-		return ""
-	}
-	defer client.Close()
-	prompt := genai.Text(INPUT_PROMPT + html_content)
-	response, err := client.GenerativeModel(os.Getenv("MODEL")).GenerateContent(ctx, prompt)
-	if err != nil {
-		return ""
-	}
-	return response.Candidates[0].Content.Parts[0]
-}
-
 func check_exsistence(client *mongo.Client, url string) bool {
 	filter := bson.D{
 		bson.E{Key: "url", Value: url},
 	}
 	count, err := client.Database("crawler").Collection("links").CountDocuments(context.TODO(), filter)
 	if err != nil {
-		return true
+		return false
 	}
 	return count > 0
 }
@@ -69,16 +54,26 @@ func (page *Page) Split() []string {
 	return strings.Split(page.content, " ")
 }
 
+func (page *Page) is_duplicate(url string) bool {
+	page.mu.Lock()
+	defer page.mu.Unlock()
+	return slices.Contains(page.seen[page.url], url)
+}
+
 func (page *Page) getLinks(client *mongo.Client, wg *sync.WaitGroup) {
 	body := page.Split()
 	defer wg.Done()
+	var innerWG sync.WaitGroup
+	page.mu.Lock()
 	page.seen[page.url] = []string{}
+	page.mu.Unlock()
 	for _, word := range body {
 		if !strings.HasPrefix(word, "href=\"") {
 			continue
 		}
-		wg.Add(1)
+		innerWG.Add(1)
 		go func(word string) {
+			defer innerWG.Done()
 			link, found := strings.CutPrefix(word, "href=\"")
 			if !found {
 				return
@@ -97,14 +92,14 @@ func (page *Page) getLinks(client *mongo.Client, wg *sync.WaitGroup) {
 			base, _ := url.Parse(page.url)
 			href, _ := url.Parse(link)
 			corrected := base.ResolveReference(href).String()
-			if validateLink(corrected) {
-				page.mu.Lock()
-				page.seen[page.url] = append(page.seen[page.url], corrected)
-				page.mu.Unlock()
-				if recursive {
-					_, ok := cache.Load(page.url)
-					if !ok && !check_exsistence(client, corrected) {
-						cache.Store(page.url, true)
+			if validateLink(corrected) && !strings.Contains(corrected, ".json") {
+				_, ok := cache.Load(corrected)
+				if !ok && !check_exsistence(client, corrected) && !page.is_duplicate(corrected) {
+					page.mu.Lock()
+					page.seen[page.url] = append(page.seen[page.url], corrected)
+					page.mu.Unlock()
+					cache.Store(corrected, true)
+					if recursive {
 						wg.Add(1)
 						go execute(corrected, client, wg)
 					}
@@ -114,17 +109,19 @@ func (page *Page) getLinks(client *mongo.Client, wg *sync.WaitGroup) {
 	}
 	//out, _ := json.MarshalIndent(page.seen, "", "  ")
 	//fmt.Print(string(out))
+	innerWG.Wait()
 	doc := map[string]any{
-		"url":     page.url,
-		"seen":    page.seen[page.url],
-		"time":    time.Now().Format(time.DateOnly),
-		"summary": summarizePage(page.content),
+		"url":  page.url,
+		"seen": page.seen[page.url],
+		"time": time.Now().Format(time.DateOnly),
 	}
-	fmt.Print(doc["summary"])
+	//fmt.Print(doc["summary"])
 	fmt.Println("Related pages: ")
+	page.mu.Lock()
 	for i := 0; i < len(page.seen[page.url]); i++ {
 		fmt.Printf("%d. %s\n", i+1, page.seen[page.url][i])
 	}
+	page.mu.Unlock()
 	mu.Lock()
 	defer mu.Unlock()
 	if !update {
@@ -151,7 +148,8 @@ func (page *Page) getLinks(client *mongo.Client, wg *sync.WaitGroup) {
 }
 
 func validateLink(link string) bool {
-	resp, err := http.Head(link)
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Get(link)
 	if err != nil {
 		return false
 	}
@@ -207,12 +205,7 @@ func crawl(_ *cobra.Command, startURL string) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	results := []map[string]any{
-		{
-			"url":  startURL,
-			"seen": []string{},
-		},
-	}
+	var results []map[string]any
 	if err = cursor.All(context.TODO(), &results); err != nil {
 		panic(err)
 	}
@@ -257,6 +250,6 @@ func crawl(_ *cobra.Command, startURL string) {
 
 func init() {
 	command.Flags().BoolVarP(&update, "update", "u", false, "Update existing links")
-	command.Flags().BoolVarP(&recursive, "recursive", "r", true, "Recursively crawl links")
+	command.Flags().BoolVarP(&recursive, "recursive", "r", false, "Recursively crawl links")
 	rootCmd.AddCommand(command)
 }
