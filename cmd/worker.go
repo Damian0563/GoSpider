@@ -8,13 +8,13 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"net/url"
 	"os"
 	"slices"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/gocolly/colly/v2"
 	"github.com/joho/godotenv"
 	"github.com/spf13/cobra"
 	"go.mongodb.org/mongo-driver/bson"
@@ -22,14 +22,10 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-var INPUT_PROMPT string = "Create a concise and informative brief summary for the following HTML content: "
-
 var (
-	sem       = make(chan struct{}, 20)
-	mu        sync.Mutex
-	update    bool
-	recursive bool
-	cache     sync.Map
+	sem    = make(chan struct{}, 20)
+	update bool
+	cache  sync.Map
 )
 
 type Page struct {
@@ -50,8 +46,15 @@ func check_exsistence(client *mongo.Client, url string) bool {
 	return count > 0
 }
 
-func (page *Page) Split() []string {
-	return strings.Split(page.content, " ")
+func (page *Page) Split() ([]string, *colly.Collector) {
+	var result []string
+	c := colly.NewCollector()
+	c.OnHTML("a[href]", func(e *colly.HTMLElement) {
+		result = append(result, e.Attr("href"))
+	})
+	c.Visit(page.url)
+	c.Wait()
+	return result, c
 }
 
 func (page *Page) is_duplicate(url string) bool {
@@ -61,69 +64,50 @@ func (page *Page) is_duplicate(url string) bool {
 }
 
 func (page *Page) getLinks(client *mongo.Client, wg *sync.WaitGroup) {
-	body := page.Split()
+	body, c := page.Split()
 	defer wg.Done()
 	var innerWG sync.WaitGroup
 	page.mu.Lock()
 	page.seen[page.url] = []string{}
 	page.mu.Unlock()
+	innerWG.Add(1)
+	ch := make(chan []string, 1)
+	go nlp_index(c, ch, &innerWG, page.url)
 	for _, word := range body {
-		if !strings.HasPrefix(word, "href=\"") {
-			continue
-		}
 		innerWG.Add(1)
 		go func(word string) {
 			defer innerWG.Done()
-			link, found := strings.CutPrefix(word, "href=\"")
-			if !found {
+			if strings.HasSuffix(word, ".js") ||
+				strings.HasSuffix(word, ".svg") ||
+				strings.HasSuffix(word, ".css") ||
+				strings.HasSuffix(word, ".json") ||
+				strings.HasPrefix(word, "#") ||
+				!validateLink(word) {
 				return
 			}
-			end := strings.Index(link, "\"")
-			if end == -1 {
-				return
-			}
-			link = link[:end]
-			if strings.HasSuffix(link, ".js") ||
-				strings.HasSuffix(link, ".svg") ||
-				strings.HasSuffix(link, ".css") ||
-				strings.HasPrefix(link, "#") {
-				return
-			}
-			base, _ := url.Parse(page.url)
-			href, _ := url.Parse(link)
-			corrected := base.ResolveReference(href).String()
-			if validateLink(corrected) && !strings.Contains(corrected, ".json") {
-				_, ok := cache.Load(corrected)
-				if !ok && !check_exsistence(client, corrected) && !page.is_duplicate(corrected) {
-					page.mu.Lock()
-					page.seen[page.url] = append(page.seen[page.url], corrected)
-					page.mu.Unlock()
-					cache.Store(corrected, true)
-					if recursive {
-						wg.Add(1)
-						go execute(corrected, client, wg)
-					}
-				}
+			_, ok := cache.Load(word)
+			if !ok && !check_exsistence(client, word) && !page.is_duplicate(word) {
+				page.mu.Lock()
+				page.seen[page.url] = append(page.seen[page.url], word)
+				page.mu.Unlock()
+				cache.Store(word, true)
 			}
 		}(word)
 	}
-	//out, _ := json.MarshalIndent(page.seen, "", "  ")
-	//fmt.Print(string(out))
 	innerWG.Wait()
+	index := <-ch
 	doc := map[string]any{
-		"url":  page.url,
-		"seen": page.seen[page.url],
-		"time": time.Now().Format(time.DateOnly),
+		"url":   page.url,
+		"seen":  page.seen[page.url],
+		"time":  time.Now().Format(time.DateOnly),
+		"index": index,
 	}
-	//fmt.Print(doc["summary"])
 	fmt.Println("Related pages: ")
 	page.mu.Lock()
 	for i := 0; i < len(page.seen[page.url]); i++ {
 		fmt.Printf("%d. %s\n", i+1, page.seen[page.url][i])
 	}
 	page.mu.Unlock()
-	mu.Lock()
-	defer mu.Unlock()
 	if !update {
 		coll := client.Database("crawler").Collection("links")
 		_, err := coll.InsertOne(context.TODO(), doc)
@@ -250,6 +234,5 @@ func crawl(_ *cobra.Command, startURL string) {
 
 func init() {
 	command.Flags().BoolVarP(&update, "update", "u", false, "Update existing links")
-	command.Flags().BoolVarP(&recursive, "recursive", "r", false, "Recursively crawl links")
 	rootCmd.AddCommand(command)
 }
