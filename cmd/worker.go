@@ -46,7 +46,7 @@ func check_exsistence(client *mongo.Client, url string) bool {
 	return count > 0
 }
 
-func (page *Page) Split() ([]string, *colly.Collector) {
+func (page *Page) Split() []string {
 	var result []string
 	c := colly.NewCollector()
 	c.OnHTML("a[href]", func(e *colly.HTMLElement) {
@@ -54,7 +54,7 @@ func (page *Page) Split() ([]string, *colly.Collector) {
 	})
 	c.Visit(page.url)
 	c.Wait()
-	return result, c
+	return result
 }
 
 func (page *Page) is_duplicate(url string) bool {
@@ -64,15 +64,19 @@ func (page *Page) is_duplicate(url string) bool {
 }
 
 func (page *Page) getLinks(client *mongo.Client, wg *sync.WaitGroup) {
-	body, c := page.Split()
+	body := page.Split()
 	defer wg.Done()
 	var innerWG sync.WaitGroup
 	page.mu.Lock()
 	page.seen[page.url] = []string{}
 	page.mu.Unlock()
+	ch := make(chan map[string]int, 1)
 	innerWG.Add(1)
-	ch := make(chan []string, 1)
-	go nlp_index(c, ch, &innerWG, page.url)
+	go func() {
+		defer innerWG.Done()
+		indexCollector := colly.NewCollector()
+		nlp_index(indexCollector, ch, page.url)
+	}()
 	for _, word := range body {
 		innerWG.Add(1)
 		go func(word string) {
