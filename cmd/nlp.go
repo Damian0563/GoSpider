@@ -1,11 +1,18 @@
 package cmd
 
 import (
+	"bytes"
+	"encoding/json"
+	"os/exec"
 	"strings"
 	"unicode"
 
 	"github.com/gocolly/colly/v2"
 )
+
+type PythonResult struct {
+	tokenized []string `json:"result"`
+}
 
 func removePunctuation(s string) string {
 	var b strings.Builder
@@ -51,6 +58,22 @@ func nlp_index(coly *colly.Collector, channel chan map[string]int, url string) {
 		words[i] = removePunctuation(word)
 	}
 	//execute python program get the result, perform indexing, save words to map and finally return.
-
+	jsonData, _ := json.Marshal(words)
+	cmd := exec.Command("python", "standardize.py")
+	cmd.Stdin = bytes.NewReader(jsonData)
+	var python_out bytes.Buffer
+	var python_result PythonResult
+	cmd.Stdout = &python_out
+	if err := json.Unmarshal(python_out.Bytes(), &python_result); err != nil {
+		for _, val := range words {
+			index(result, val)
+		}
+		channel <- result
+		return
+	}
+	for _, val := range python_result.tokenized {
+		index(result, val)
+	}
+	channel <- result
 	channel <- result
 }
