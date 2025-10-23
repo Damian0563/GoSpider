@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os/exec"
 	"strings"
 	"unicode"
@@ -11,7 +12,7 @@ import (
 )
 
 type PythonResult struct {
-	tokenized []string `json:"result"`
+	Tokenized []string `json:"result"`
 }
 
 func removePunctuation(s string) string {
@@ -31,25 +32,31 @@ func index(result map[string]int, text string) {
 	}
 }
 
+func standardize(words []string, input string) {
+	for _, word := range strings.Fields(input) {
+		words = append(words, strings.ToLower(word))
+	}
+}
+
 func nlp_index(coly *colly.Collector, channel chan map[string]int, url string) {
 	result := make(map[string]int)
 	var words []string
 	coly.OnHTML("title", func(h *colly.HTMLElement) {
-		words = append(words, strings.ToLower(h.Text))
+		standardize(words, h.Text)
 	})
 	coly.OnHTML("img", func(h *colly.HTMLElement) {
 		altText := h.Attr("alt")
 		if altText != "" {
-			words = append(words, strings.ToLower(altText))
+			standardize(words, altText)
 		}
 	})
 	coly.OnHTML("meta[name=description]", func(h *colly.HTMLElement) {
-		words = append(words, strings.ToLower(h.Attr("content")))
+		standardize(words, h.Attr("content"))
 	})
 	coly.OnHTML("h1, h2, h3", func(h *colly.HTMLElement) {
 		headingEntry := h.Name + " " + h.Text
 		if headingEntry != "" {
-			words = append(words, strings.ToLower(headingEntry))
+			standardize(words, headingEntry)
 		}
 	})
 	coly.Visit(url)
@@ -59,21 +66,32 @@ func nlp_index(coly *colly.Collector, channel chan map[string]int, url string) {
 	}
 	//execute python program get the result, perform indexing, save words to map and finally return.
 	jsonData, _ := json.Marshal(words)
-	cmd := exec.Command("python", "standardize.py")
+	cmd := exec.Command("python", "cmd/standardize.py")
 	cmd.Stdin = bytes.NewReader(jsonData)
+	fmt.Print(string(jsonData))
+	var python_err bytes.Buffer
+	cmd.Stderr = &python_err
+	if err := cmd.Run(); err != nil {
+		fmt.Printf("Python STDERR:\n%s\n", python_err.String())
+		channel <- result
+		return
+	}
 	var python_out bytes.Buffer
 	var python_result PythonResult
 	cmd.Stdout = &python_out
+	fmt.Println(python_out.Bytes())
+	fmt.Println(python_result)
 	if err := json.Unmarshal(python_out.Bytes(), &python_result); err != nil {
+		fmt.Println(err)
 		for _, val := range words {
 			index(result, val)
 		}
 		channel <- result
 		return
 	}
-	for _, val := range python_result.tokenized {
+	fmt.Println(python_result.Tokenized)
+	for _, val := range python_result.Tokenized {
 		index(result, val)
 	}
-	channel <- result
 	channel <- result
 }
