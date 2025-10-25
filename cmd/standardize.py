@@ -6,7 +6,7 @@ from nltk.stem import WordNetLemmatizer
 
 def main()->list:
     data=sys.stdin.read()
-    words=json.loads(data)
+    words=" ".join(json.loads(data))
     tokenized=nltk.word_tokenize(words)
     tags=nltk.pos_tag(tokenized)
     lemmatizer=WordNetLemmatizer()

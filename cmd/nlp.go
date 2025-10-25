@@ -61,7 +61,7 @@ func nlp_index(coly *colly.Collector, channel chan map[string]int, url string) {
 	for i, word := range words {
 		words[i] = removePunctuation(word)
 	}
-	//execute python program get the result, perform indexing, save words to map and finally return.
+
 	jsonData, _ := json.Marshal(words)
 	var python_out bytes.Buffer
 	var python_err bytes.Buffer
