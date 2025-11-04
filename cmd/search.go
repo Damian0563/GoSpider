@@ -55,6 +55,25 @@ func standardize_input(query string) []string {
 	return python_result
 }
 
+func Contains(slice []string, val string) bool {
+	for _, item := range slice {
+		if item == val {
+			return true
+		}
+	}
+	return false
+}
+
+func Count(slice []string, val string) int {
+	result := 0
+	for _, item := range slice {
+		if item == val {
+			result++
+		}
+	}
+	return result
+}
+
 func query_database(tokenized []string) []string {
 	if err := godotenv.Load(); err != nil {
 		log.Println(err)
@@ -79,18 +98,24 @@ func query_database(tokenized []string) []string {
 	if err := cursor.All(context.TODO(), &results); err != nil {
 		panic(err)
 	}
-	var urls []string
+	urls := make(map[string]int, 10)
 	for _, result := range results {
 		res, _ := bson.MarshalExtJSON(result, false, false)
 		var jsonMap map[string]interface{}
 		json.Unmarshal([]byte(res), &jsonMap)
-		fmt.Println(jsonMap["index"])
-		if urlValue, ok := jsonMap["url"].(string); ok {
-			urls = append(urls, urlValue)
+		if url, ok := jsonMap["url"].(string); ok {
+			simmilarity := 0
+			if urlValue, ok := jsonMap["index"].(string); ok {
+				simmilarity += Count(tokenized, urlValue)
+			}
+			urls[url] = simmilarity
 		}
 	}
-
-	return urls
+	var final_result []string
+	for url, _ := range urls {
+		final_result = append(final_result, url)
+	}
+	return final_result
 }
 
 func search(_ *cobra.Command, query string) {
