@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 
 	"github.com/joho/godotenv"
@@ -74,6 +75,24 @@ func Count(slice []string, val string) int {
 	return result
 }
 
+func sort_similarities(urls map[string]int) []string {
+	keys := make([]string, 0, len(urls))
+	for k := range urls {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var result []string
+	max_matches := 0
+	for _, k := range keys {
+		result = append(result, k)
+		max_matches++
+		if max_matches > 10 {
+			break
+		}
+	}
+	return result
+}
+
 func query_database(tokenized []string) []string {
 	if err := godotenv.Load(); err != nil {
 		log.Println(err)
@@ -111,15 +130,15 @@ func query_database(tokenized []string) []string {
 			urls[url] = simmilarity
 		}
 	}
-	var final_result []string
-	for url, _ := range urls {
-		final_result = append(final_result, url)
-	}
-	return final_result
+	most_similar := sort_similarities(urls) //get top 10
+	return most_similar
 }
 
 func search(_ *cobra.Command, query string) {
 	tokenized := standardize_input(query)
 	results := query_database(tokenized)
-	fmt.Println(results)
+	fmt.Println("-----------Search Results-----------")
+	for url := range results {
+		fmt.Println("\t", url)
+	}
 }
