@@ -63,6 +63,32 @@ func (page *Page) is_duplicate(url string) bool {
 	return slices.Contains(page.seen[page.url], url)
 }
 
+func get_references(url string, ch chan []string, client *mongo.Client) {
+	filter := bson.D{
+		{Key: "seen", Value: url},
+	}
+	coll := client.Database("crawler").Collection("links")
+	cursor, err := coll.Find(context.TODO(), filter)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer cursor.Close(context.TODO())
+	var results []Document
+	if err := cursor.All(context.TODO(), &results); err != nil {
+		log.Fatal(err)
+	}
+	var list_ref []string
+	for _, result := range results {
+		res, _ := bson.MarshalExtJSON(result, false, false)
+		var jsonMap map[string]interface{}
+		json.Unmarshal([]byte(res), &jsonMap)
+		if url, ok := jsonMap["url"].(string); ok {
+			list_ref = append(list_ref, url)
+		}
+	}
+	ch <- list_ref
+}
+
 func (page *Page) getLinks(client *mongo.Client, wg *sync.WaitGroup) {
 	body := page.Split()
 	defer wg.Done()
@@ -77,6 +103,13 @@ func (page *Page) getLinks(client *mongo.Client, wg *sync.WaitGroup) {
 		indexCollector := colly.NewCollector()
 		nlp_index(indexCollector, ch, page.url)
 	}()
+	ref_chan := make(chan []string, 1)
+	innerWG.Add(1)
+	go func() {
+		defer innerWG.Done()
+		get_references(page.url, ref_chan, client)
+	}()
+	references := <-ref_chan
 	for _, word := range body {
 		innerWG.Add(1)
 		go func(word string) {
@@ -101,10 +134,11 @@ func (page *Page) getLinks(client *mongo.Client, wg *sync.WaitGroup) {
 	innerWG.Wait()
 	index := <-ch
 	doc := map[string]any{
-		"url":   page.url,
-		"seen":  page.seen[page.url],
-		"time":  time.Now().Format(time.DateOnly),
-		"index": index,
+		"url":        page.url,
+		"seen":       page.seen[page.url],
+		"time":       time.Now().Format(time.DateOnly),
+		"index":      index,
+		"references": references,
 	}
 	fmt.Println("Related pages: ")
 	page.mu.Lock()

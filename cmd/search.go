@@ -127,7 +127,15 @@ func query_database(tokenized []string) []string {
 			if urlValue, ok := jsonMap["index"].(string); ok {
 				simmilarity += Count(tokenized, urlValue)
 			}
-			urls[url] = simmilarity
+			if simmilarity != 0 {
+				if list, ok := jsonMap["references"].([]string); ok {
+					references := len(list)
+					urls[url] = simmilarity + references
+				} else {
+					urls[url] = simmilarity
+				}
+			}
+
 		}
 	}
 	most_similar := sort_similarities(urls) //get top 10
@@ -137,8 +145,13 @@ func query_database(tokenized []string) []string {
 func search(_ *cobra.Command, query string) {
 	tokenized := standardize_input(query)
 	results := query_database(tokenized)
-	fmt.Println("-----------Search Results-----------")
-	for url := range results {
-		fmt.Println("\t", url)
+	if len(results) > 0 {
+		fmt.Println("----------- Search Results -----------")
+		for url := range results {
+			fmt.Println("\t", url)
+		}
+	} else {
+		fmt.Println("----------- No search results found :( -----------")
 	}
+
 }
