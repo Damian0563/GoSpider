@@ -29,11 +29,12 @@ var search_command = &cobra.Command{
 }
 
 type Document struct {
-	ID    bson.ObjectID  `bson:"id"`
-	URL   string         `bson:"url"`
-	Seen  []string       `bson:"seen"`
-	Time  string         `bson:"time"`
-	Index map[string]int `bson:"index"`
+	ID         bson.ObjectID  `bson:"id"`
+	URL        string         `bson:"url"`
+	Seen       []string       `bson:"seen"`
+	Time       string         `bson:"time"`
+	References []string       `bson:"references"`
+	Index      map[string]int `bson:"index"`
 }
 
 func standardize_input(query string) []string {
@@ -65,11 +66,11 @@ func Contains(slice []string, val string) bool {
 	return false
 }
 
-func Count(slice []string, val string) int {
+func Count(slice []string, words map[string]int) int {
 	result := 0
 	for _, item := range slice {
-		if item == val {
-			result++
+		if _, ok := words[item]; ok {
+			result += words[item]
 		}
 	}
 	return result
@@ -124,18 +125,18 @@ func query_database(tokenized []string) []string {
 		json.Unmarshal([]byte(res), &jsonMap)
 		if url, ok := jsonMap["url"].(string); ok {
 			simmilarity := 0
-			if urlValue, ok := jsonMap["index"].(string); ok {
-				simmilarity += Count(tokenized, urlValue)
-			}
-			if simmilarity != 0 {
-				if list, ok := jsonMap["references"].([]string); ok {
-					references := len(list)
-					urls[url] = simmilarity + references
-				} else {
-					urls[url] = simmilarity
+			if words, ok := jsonMap["index"].(map[string]int); ok {
+				simmilarity += Count(tokenized, words)
+				fmt.Println(url, simmilarity, tokenized, words)
+				if simmilarity != 0 {
+					if list, ok := jsonMap["references"].([]string); ok {
+						references := len(list)
+						urls[url] = simmilarity + references
+					} else {
+						urls[url] = simmilarity
+					}
 				}
 			}
-
 		}
 	}
 	most_similar := sort_similarities(urls) //get top 10

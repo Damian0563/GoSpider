@@ -109,7 +109,7 @@ func (page *Page) getLinks(client *mongo.Client, wg *sync.WaitGroup) {
 		defer innerWG.Done()
 		get_references(page.url, ref_chan, client)
 	}()
-	references := <-ref_chan
+	var references []string = <-ref_chan
 	for _, word := range body {
 		innerWG.Add(1)
 		go func(word string) {
