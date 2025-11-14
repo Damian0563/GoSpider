@@ -66,11 +66,14 @@ func Contains(slice []string, val string) bool {
 	return false
 }
 
-func Count(slice []string, words map[string]int) int {
+func Count(slice []string, words map[string]interface{}) int {
 	result := 0
 	for _, item := range slice {
-		if _, ok := words[item]; ok {
-			result += words[item]
+		fmt.Println(item, words[item])
+		if value, ok := words[item]; ok {
+			if num, ok := value.(float64); ok {
+				result += int(num)
+			}
 		}
 	}
 	return result
@@ -121,13 +124,12 @@ func query_database(tokenized []string) []string {
 	urls := make(map[string]int, 10)
 	for _, result := range results {
 		res, _ := bson.MarshalExtJSON(result, false, false)
-		var jsonMap map[string]interface{}
+		var jsonMap map[string]any
 		json.Unmarshal([]byte(res), &jsonMap)
 		if url, ok := jsonMap["url"].(string); ok {
 			simmilarity := 0
-			if words, ok := jsonMap["index"].(map[string]int); ok {
+			if words, ok := jsonMap["index"].(map[string]any); ok {
 				simmilarity += Count(tokenized, words)
-				fmt.Println(url, simmilarity, tokenized, words)
 				if simmilarity != 0 {
 					if list, ok := jsonMap["references"].([]string); ok {
 						references := len(list)
@@ -140,6 +142,7 @@ func query_database(tokenized []string) []string {
 		}
 	}
 	most_similar := sort_similarities(urls) //get top 10
+	fmt.Println(most_similar)
 	return most_similar
 }
 
