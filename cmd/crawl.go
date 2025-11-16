@@ -101,7 +101,7 @@ func (page *Page) getLinks(client *mongo.Client, wg *sync.WaitGroup) {
 	go func() {
 		defer innerWG.Done()
 		indexCollector := colly.NewCollector()
-		nlp_index(indexCollector, ch, page.url)
+		nlpIndex(indexCollector, ch, page.url)
 	}()
 	ref_chan := make(chan []string, 1)
 	innerWG.Add(1)
@@ -166,7 +166,6 @@ func (page *Page) getLinks(client *mongo.Client, wg *sync.WaitGroup) {
 			log.Fatal(err)
 		}
 	}
-
 }
 
 func validateLink(link string) bool {
@@ -273,6 +272,6 @@ func crawl(_ *cobra.Command, startURL string) {
 func init() {
 	crawl_command.Flags().BoolVarP(&update, "update", "u", false, "Update existing links")
 
-	rootCmd.AddCommand(search_command)
+	rootCmd.AddCommand(searchCommand)
 	rootCmd.AddCommand(crawl_command)
 }

@@ -35,7 +35,7 @@ func standardize(words []string, input string) []string {
 	return words
 }
 
-func nlp_index(coly *colly.Collector, channel chan map[string]int, url string) {
+func nlpIndex(coly *colly.Collector, channel chan map[string]int, url string) {
 	result := make(map[string]int)
 	var words []string
 	coly.OnHTML("title", func(h *colly.HTMLElement) {
@@ -63,27 +63,27 @@ func nlp_index(coly *colly.Collector, channel chan map[string]int, url string) {
 	}
 
 	jsonData, _ := json.Marshal(words)
-	var python_out bytes.Buffer
-	var python_err bytes.Buffer
-	var python_result []string
+	var pythonOut bytes.Buffer
+	var pythonErr bytes.Buffer
+	var pythonRes []string
 	cmd := exec.Command("python", "cmd/standardize.py")
 	cmd.Stdin = bytes.NewReader(jsonData)
-	cmd.Stderr = &python_err
-	cmd.Stdout = &python_out
+	cmd.Stderr = &pythonErr
+	cmd.Stdout = &pythonOut
 	if err := cmd.Run(); err != nil {
-		fmt.Printf("Python STDERR:\n%s\n", python_err.String())
+		fmt.Printf("Python STDERR:\n%s\n", pythonErr.String())
 		channel <- result
 		return
 	}
-	trimmedOutput := bytes.TrimSpace(python_out.Bytes())
-	if err := json.Unmarshal(trimmedOutput, &python_result); err != nil {
+	trimmedOutput := bytes.TrimSpace(pythonOut.Bytes())
+	if err := json.Unmarshal(trimmedOutput, &pythonRes); err != nil {
 		for _, val := range words {
 			index(result, val)
 		}
 		channel <- result
 		return
 	}
-	for _, val := range python_result {
+	for _, val := range pythonRes {
 		index(result, val)
 	}
 	channel <- result

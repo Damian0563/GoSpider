@@ -18,7 +18,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-var search_command = &cobra.Command{
+var searchCommand = &cobra.Command{
 	Use:   "search",
 	Short: "Crawl website for redirecting links",
 	Long:  "Crawl website for redirecting links recursively with concurrency limits.",
@@ -37,24 +37,24 @@ type Document struct {
 	Index      map[string]int `bson:"index"`
 }
 
-func standardize_input(query string) []string {
+func standardizeInput(query string) []string {
 	jsonData, _ := json.Marshal(strings.Fields(query))
-	var python_out bytes.Buffer
-	var python_err bytes.Buffer
-	var python_result []string
+	var pythonOut bytes.Buffer
+	var pythonErr bytes.Buffer
+	var pythonRes []string
 	cmd := exec.Command("python", "cmd/standardize.py")
 	cmd.Stdin = bytes.NewReader(jsonData)
-	cmd.Stderr = &python_err
-	cmd.Stdout = &python_out
+	cmd.Stderr = &pythonErr
+	cmd.Stdout = &pythonOut
 	if err := cmd.Run(); err != nil {
-		fmt.Printf("Python STDERR:\n%s\n", python_err.String())
+		fmt.Printf("Python STDERR:\n%s\n", pythonErr.String())
 		return strings.Fields(query)
 	}
-	trimmedOutput := bytes.TrimSpace(python_out.Bytes())
-	if err := json.Unmarshal(trimmedOutput, &python_result); err != nil {
+	trimmedOutput := bytes.TrimSpace(pythonOut.Bytes())
+	if err := json.Unmarshal(trimmedOutput, &pythonRes); err != nil {
 		return strings.Fields(query)
 	}
-	return python_result
+	return pythonRes
 }
 
 func Contains(slice []string, val string) bool {
@@ -66,7 +66,7 @@ func Contains(slice []string, val string) bool {
 	return false
 }
 
-func Count(slice []string, words map[string]interface{}) int {
+func Count(slice []string, words map[string]any) int {
 	result := 0
 	for _, item := range slice {
 		fmt.Println(item, words[item])
@@ -79,25 +79,25 @@ func Count(slice []string, words map[string]interface{}) int {
 	return result
 }
 
-func sort_similarities(urls map[string]int) []string {
+func sortSimilarities(urls map[string]int) []string {
 	keys := make([]string, 0, len(urls))
 	for k := range urls {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
 	var result []string
-	max_matches := 0
+	maxMatches := 0
 	for _, k := range keys {
 		result = append(result, k)
-		max_matches++
-		if max_matches > 10 {
+		maxMatches++
+		if maxMatches > 10 {
 			break
 		}
 	}
 	return result
 }
 
-func query_database(tokenized []string) []string {
+func queryDatabase(tokenized []string) []string {
 	if err := godotenv.Load(); err != nil {
 		log.Println(err)
 		log.Println("No .env file found — using system environment variables")
@@ -125,30 +125,32 @@ func query_database(tokenized []string) []string {
 	for _, result := range results {
 		res, _ := bson.MarshalExtJSON(result, false, false)
 		var jsonMap map[string]any
-		json.Unmarshal([]byte(res), &jsonMap)
-		if url, ok := jsonMap["url"].(string); ok {
-			simmilarity := 0
-			if words, ok := jsonMap["index"].(map[string]any); ok {
-				simmilarity += Count(tokenized, words)
-				if simmilarity != 0 {
-					if list, ok := jsonMap["references"].([]string); ok {
-						references := len(list)
-						urls[url] = simmilarity + references
-					} else {
-						urls[url] = simmilarity
+		if err := json.Unmarshal([]byte(res), &jsonMap); err == nil {
+			if url, ok := jsonMap["url"].(string); ok {
+				simmilarity := 0
+				if words, ok := jsonMap["index"].(map[string]any); ok {
+					simmilarity += Count(tokenized, words)
+					if simmilarity != 0 {
+						if list, ok := jsonMap["references"].([]string); ok {
+							references := len(list)
+							urls[url] = simmilarity + references
+						} else {
+							urls[url] = simmilarity
+						}
 					}
 				}
 			}
 		}
+
 	}
-	most_similar := sort_similarities(urls) //get top 10
-	fmt.Println(most_similar)
-	return most_similar
+	mostSimilar := sortSimilarities(urls) // get top 10
+	fmt.Println(mostSimilar)
+	return mostSimilar
 }
 
 func search(_ *cobra.Command, query string) {
-	tokenized := standardize_input(query)
-	results := query_database(tokenized)
+	tokenized := standardizeInput(query)
+	results := queryDatabase(tokenized)
 	if len(results) > 0 {
 		fmt.Println("----------- Search Results -----------")
 		for url := range results {
@@ -157,5 +159,4 @@ func search(_ *cobra.Command, query string) {
 	} else {
 		fmt.Println("----------- No search results found :( -----------")
 	}
-
 }
