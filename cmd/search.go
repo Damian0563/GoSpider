@@ -69,7 +69,7 @@ func Contains(slice []string, val string) bool {
 func Count(slice []string, words map[string]any) int {
 	result := 0
 	for _, item := range slice {
-		fmt.Println(item, words[item])
+		// fmt.Println(item, words[item])
 		if value, ok := words[item]; ok {
 			if num, ok := value.(float64); ok {
 				result += int(num)
@@ -80,7 +80,7 @@ func Count(slice []string, words map[string]any) int {
 }
 
 func sortSimilarities(urls map[string]int) []string {
-	keys := make([]string, 0, len(urls))
+	var keys []string
 	for k := range urls {
 		keys = append(keys, k)
 	}
@@ -144,7 +144,7 @@ func queryDatabase(tokenized []string) []string {
 
 	}
 	mostSimilar := sortSimilarities(urls) // get top 10
-	fmt.Println(mostSimilar)
+	// fmt.Println(mostSimilar)
 	return mostSimilar
 }
 
@@ -153,7 +153,7 @@ func search(_ *cobra.Command, query string) {
 	results := queryDatabase(tokenized)
 	if len(results) > 0 {
 		fmt.Println("----------- Search Results -----------")
-		for url := range results {
+		for _, url := range results {
 			fmt.Println("\t", url)
 		}
 	} else {
