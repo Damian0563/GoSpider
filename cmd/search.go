@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/joho/godotenv"
 	"github.com/spf13/cobra"
@@ -111,6 +112,8 @@ func queryDatabase(tokenized []string) []string {
 	defer client.Disconnect(context.TODO())
 	coll := client.Database("crawler").Collection("links")
 	var results []Document
+	var mu sync.Mutex
+	var wg sync.WaitGroup
 	filter := bson.M{}
 	cursor, err := coll.Find(context.TODO(), filter)
 	if err != nil {
@@ -123,26 +126,34 @@ func queryDatabase(tokenized []string) []string {
 	}
 	urls := make(map[string]int, 10)
 	for _, result := range results {
-		res, _ := bson.MarshalExtJSON(result, false, false)
-		var jsonMap map[string]any
-		if err := json.Unmarshal([]byte(res), &jsonMap); err == nil {
-			if url, ok := jsonMap["url"].(string); ok {
-				simmilarity := 0
-				if words, ok := jsonMap["index"].(map[string]any); ok {
-					simmilarity += Count(tokenized, words)
-					if simmilarity != 0 {
-						if list, ok := jsonMap["references"].([]string); ok {
-							references := len(list)
-							urls[url] = simmilarity + references
-						} else {
-							urls[url] = simmilarity
+		wg.Add(1)
+		go func(result any) {
+			defer wg.Done()
+			res, _ := bson.MarshalExtJSON(result, false, false)
+			var jsonMap map[string]any
+			if err := json.Unmarshal([]byte(res), &jsonMap); err == nil {
+				if url, ok := jsonMap["url"].(string); ok {
+					simmilarity := 0
+					if words, ok := jsonMap["index"].(map[string]any); ok {
+						simmilarity += Count(tokenized, words)
+						if simmilarity != 0 {
+							if list, ok := jsonMap["references"].([]string); ok {
+								references := len(list)
+								mu.Lock()
+								urls[url] = simmilarity + references
+								mu.Unlock()
+							} else {
+								mu.Lock()
+								urls[url] = simmilarity
+								mu.Unlock()
+							}
 						}
 					}
 				}
 			}
-		}
-
+		}(result)
 	}
+	wg.Wait()
 	mostSimilar := sortSimilarities(urls) // get top 10
 	// fmt.Println(mostSimilar)
 	return mostSimilar
