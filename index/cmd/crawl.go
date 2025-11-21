@@ -73,7 +73,7 @@ func get_references(url string, ch chan []string, client *mongo.Client) {
 		log.Fatal(err)
 	}
 	defer cursor.Close(context.TODO())
-	var results []Document
+	var results []map[string]any
 	if err := cursor.All(context.TODO(), &results); err != nil {
 		log.Fatal(err)
 	}
@@ -222,6 +222,7 @@ func crawl(_ *cobra.Command, startURL string) {
 	filter := bson.D{
 		bson.E{Key: "url", Value: startURL},
 	}
+	log.Println(startURL)
 	cursor, err := client.Database("crawler").Collection("links").Find(context.TODO(), filter)
 	if err != nil {
 		log.Fatal(err)
@@ -271,7 +272,5 @@ func crawl(_ *cobra.Command, startURL string) {
 
 func init() {
 	crawl_command.Flags().BoolVarP(&update, "update", "u", false, "Update existing links")
-
-	rootCmd.AddCommand(searchCommand)
 	rootCmd.AddCommand(crawl_command)
 }

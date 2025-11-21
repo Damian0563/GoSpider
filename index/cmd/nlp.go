@@ -66,12 +66,16 @@ func nlpIndex(coly *colly.Collector, channel chan map[string]int, url string) {
 	var pythonOut bytes.Buffer
 	var pythonErr bytes.Buffer
 	var pythonRes []string
-	cmd := exec.Command("python", "cmd/standardize.py")
+	pythonPath := "/home/damian/Desktop/GoSpider/index/venv/bin/python"
+	cmd := exec.Command(pythonPath, "cmd/standardize.py") //I am here losing my sleep over python instead python3 BRUH
 	cmd.Stdin = bytes.NewReader(jsonData)
 	cmd.Stderr = &pythonErr
 	cmd.Stdout = &pythonOut
 	if err := cmd.Run(); err != nil {
 		fmt.Printf("Python STDERR:\n%s\n", pythonErr.String())
+		fmt.Println(pythonOut.String())
+		fmt.Println(pythonErr.String())
+		fmt.Println(err)
 		channel <- result
 		return
 	}
