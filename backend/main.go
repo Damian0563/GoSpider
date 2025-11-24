@@ -16,8 +16,8 @@ func main(){
 		log.Println(err)
 		log.Println("No .env file found — using system environment variables")
 	}
-	// uri := os.Getenv("MONGO_URI")
-	// fmt.Println(uri)
+	uri := os.Getenv("MONGO_URI")
+	fmt.Println(uri)
 	http.HandleFunc("/",homepage)
 	log.Fatal(http.ListenAndServe(":8080",nil))
 
